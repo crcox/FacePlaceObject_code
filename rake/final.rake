@@ -1,7 +1,7 @@
 require 'rake'
 require 'rake/clean'
 require 'tmpdir'
-require File.join(ENV['HOME'],'src','FacePlaceObject','rake','methods')
+require File.join(ENV['HOME'],'src','FacePlaceObject_code','rake','methods')
 
 HOME = ENV['HOME']
 XYZ_ORIENT = ENV.fetch('XYZ_ORIENT') {'RAI'} # order of xyz coordinates in txt files.
