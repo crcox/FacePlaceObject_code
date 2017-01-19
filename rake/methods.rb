@@ -54,8 +54,7 @@ def png_threshold(target, source, threshold=0, scalemax=0, sign='-', colorscale_
   end
 end
 
-
-def png_ttest(target, source)
+def png_ttest(target, source, threshold=0, scalemax=0, sign='-', colorscale_name="red_to_blue")
   spath = File.dirname(source).to_s
   prefix = target.sub('.png','')
 
@@ -65,14 +64,13 @@ def png_ttest(target, source)
     sh("3dcopy #{source} #{funcfile}")
   end
 
-  scalemax = 0  # autorange
-  if target.include? "p05" then
-    threshold="0.05 *p"
-  elsif target.include? "p01" then
-    threshold="0.01 *p"
+  if threshold.is_a? String then
+    pq = threshold[0]
+    val = threshold[1..-1].to_f / 100
+    threshold = "#{val} *#{pq}"
   end
-  sign = '+'
-  configure_afni_figure(funcfile,scalemax,threshold,sign)
+
+  configure_afni_figure_continuous(funcfile,scalemax,threshold,sign,colorscale_name)
 
   Dir.mktmpdir do |tmpdir|
     drive_afni_suma_record_figures(tmpdir, prefix)
@@ -198,6 +196,15 @@ def afni_undump(target, source, anat, orient='')
   end
 end
 
+def afni_maskdump(target, source, mask)
+  begin
+    sh("3dmaskdump -mask #{mask} -index -xyz -o #{target} #{source}")
+  rescue
+    puts "There are zero non-zero voxels in #{source}, #{target} will be empty."
+    touch target
+  end
+end
+
 def afni_scale(target, source, multiple=1)
   target_prefix = target.split("+").first
   sh("3dcalc -a #{source} -expr 'a*#{multiple}' -prefix #{target_prefix}")
@@ -219,6 +226,66 @@ def afni_mean(target, source_list, blur=0)
   else
     sh("3dmerge -gmean -prefix #{target_prefix} #{source_list.join(' ')}")
   end
+end
+
+def afni_ttest(target, source_list, blur=0)
+  target_prefix, target_ext = target.split('+',2)
+  if blur > 0 then
+    Dir.mktmpdir do |dir|
+      source_list_prefix = source_list.collect {|x| x.split('+').first}
+      source_list_blur_prefix = source_list_prefix.collect {|x| File.join(dir,"#{File.basename(x)}_b#{blur}")}
+      source_list_blur = source_list_blur_prefix.collect {|x| [x,target_ext].join('+')}
+      source_list_blur_prefix.zip(source_list).each do |blurred, source|
+        sh("3dmerge -1blur_fwhm #{blur} -prefix #{blurred} #{source}")
+      end
+      sh("3dttest++ -setA #{source_list_blur.join(' ')} -prefix #{target_prefix}")
+    end
+  else
+    sh("3dttest++ -setA #{source_list.join(' ')} -prefix #{target_prefix}")
+  end
+end
+
+def afni_statmask(target, source, threshold, sign='-')
+  target_prefix = target.split('+').first
+  if threshold.is_a? String then
+    pq = threshold[0]
+    val = threshold[1..-1].to_f / 100
+    threshold = "#{val} *#{pq}"
+  end
+  if sign == '+'
+    noneg='-1noneg'
+  end
+  sh("3dmerge -1thresh '#{threshold}' #{noneg} -prefix #{target_prefix} #{source}")
+end
+
+
+def afni_signcount(target, source_list, blur=0)
+  target_prefix, target_ext = target.split('+',2)
+  Dir.mktmpdir do |dir|
+    pos_full = File.join(dir,['pos',target_ext].join('+'))
+    pos_prefix = File.join(dir,'pos')
+    neg_full = File.join(dir,['neg',target_ext].join('+'))
+    neg_prefix = File.join(dir,'neg')
+    overlap_full = File.join(dir,['overlap',target_ext].join('+'))
+    overlap_prefix = File.join(dir,'overlap')
+    proportion_full = File.join(dir,['proportion',target_ext].join('+'))
+    proportion_prefix = File.join(dir,'proportion')
+    if blur > 0 then
+      blur_arg = "-1blur_fwhm #{blur}"
+    else
+      blur_arg = ""
+    end
+    sh("3dmerge #{blur_arg} -gcount -prefix #{overlap_prefix} #{source_list.join(' ')}")
+    sh("3dmerge #{blur_arg} -1noneg -gcount -prefix #{pos_prefix} #{source_list.join(' ')}")
+    sh("3dmerge #{blur_arg} -2clip 0 99999 -gcount -prefix #{neg_prefix} #{source_list.join(' ')}")
+    if File.file?(neg_full) then
+      sh("3dcalc -a #{pos_full} -b #{neg_full} -c #{overlap_full} -expr '((a+0.0001)/(a+b+0.0001))*step(c)' -prefix #{proportion_prefix}")
+    else
+      sh("3dcalc -a #{pos_full} -c #{overlap_full} -expr '((a+0.0001)/(a+0+0.0001))*step(c)' -prefix #{proportion_prefix}")
+    end
+    sh("3dbucket -fbuc -prefix #{target_prefix} #{proportion_full} #{overlap_full}")
+  end
+  sh("3drefit -fith #{target}")
 end
 
 def afni_overlap(target, source_list, blur=0)
